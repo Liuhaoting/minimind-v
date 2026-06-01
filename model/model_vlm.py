@@ -60,12 +60,21 @@ class MiniMindVLM(MiniMindForCausalLM):
 
     @staticmethod
     def image2tensor(image, processor):
+        """将输入的图像数据转换为适合输入到视觉模型的格式。
+        Args:   image (PIL.Image or np.ndarray): 输入的图像数据，可以是PIL图像对象或NumPy数组。
+                processor : 用于预处理图像数据的处理器对象，通常是从预训练视觉模型中获取的。
+        Returns:     dict: 包含预处理后图像数据的字典，通常包含键 'pixel_values'，其值是一个张量，形状为 (batch_size, num_channels, height, width)，适合输入到视觉模型中进行特征提取。
+        """
         if image.mode in ['RGBA', 'LA']: image = image.convert('RGB')
         inputs = processor(images=image, return_tensors="pt")
         return inputs
 
     @staticmethod
     def get_image_embeddings(image_inputs, vision_model):
+        """将输入的图像数据转换为视觉特征张量。
+        Args:   image_inputs (torch.Tensor or dict): 输入的图像数据，可以是一个张量或一个包含图像数据的字典。每个图像数据应该已经过预处理并转换为适合输入到视觉模型的格式。
+                vision_model (nn.Module): 用于提取视觉特征的预训练视觉模型。
+        Returns:     torch.Tensor: 提取的视觉特征张量，形状为 (batch_size, num_patches, hidden_size)，其中包含了每个输入图像的视觉特征表示。"""
         if hasattr(image_inputs, 'keys'):
             image_inputs = {k: v.squeeze(1) if v.ndim > 2 and v.shape[1] == 1 else v for k, v in image_inputs.items()}
         with torch.no_grad():
@@ -74,6 +83,11 @@ class MiniMindVLM(MiniMindForCausalLM):
 
     @torch.compiler.disable
     def count_vision_proj(self, tokens, h, vision_tensors=None, seqlen=512):
+        """将视觉特征插入到语言模型的隐藏状态中，替换掉输入序列中对应的特殊标记位置。
+        Args:     tokens (torch.Tensor): 输入的token ID张量，形状为 (batch_size, seq_length)。
+            h (torch.Tensor): 语言模型的隐藏状态张量，形状为 (batch_size, seq_length, hidden_size)。
+            vision_tensors (torch.Tensor, optional): 视觉特征张量，形状为 (batch_size, image_token_len, hidden_size)。默认为None。      
+        Returns:     torch.Tensor: 更新后的隐藏状态张量，形状为 (batch_size, seq_length, hidden_size)，其中包含了视觉特征。"""
         if vision_tensors is None or not self.config.image_ids:
             return h
         marker, vf = self.config.image_ids[0], vision_tensors
