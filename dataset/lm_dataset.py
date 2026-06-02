@@ -5,12 +5,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import json
 import random
 import torch
-import io
+import io # 提供内存中的二进制流操作，用于从字节数据打开图片。
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from model.model_vlm import MiniMindVLM
-import pyarrow as pa
-import pyarrow.parquet as pq
+import pyarrow as pa # Apache Arrow 的 Python 接口，用于高效处理列式数据。 
+import pyarrow.parquet as pq # Parquet 文件格式的读写库
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -45,6 +45,15 @@ def post_processing_chat(prompt_content, empty_think_ratio=0.2):
 
 
 class VLMDataset(Dataset):
+    """用于视觉语言模型训练的数据集类，继承自PyTorch的Dataset基类。
+    该类负责从Parquet文件中加载对话数据和图像数据，并将它们预处理成适合模型输入的格式。
+    Args:    parquet_path: Parquet文件的路径，包含对话和图像数据。
+            tokenizer: 用于文本数据的分词器对象，通常是从预训练语言模型中获取的。
+            preprocess: 用于图像数据预处理的函数或对象，通常是从预训练视觉模型中获取的。
+            max_length: 输入文本的最大长度，超过该长度的文本将被截断。
+            image_special_token: 用于替换对话中图像占位符的特殊标记字符串，默认为'<|image_pad|>'。
+            image_token_len: 替换图像占位符的特殊标记的重复次数，默认为64，以确保足够的长度来表示图像信息。
+    """
     def __init__(self, parquet_path, tokenizer, preprocess=None, max_length=512, image_special_token='<|image_pad|>', image_token_len=64):
         super().__init__()
         self.table = pa.Table.from_batches(pq.ParquetFile(parquet_path).iter_batches())
@@ -72,6 +81,9 @@ class VLMDataset(Dataset):
         )
 
     def generate_labels(self, input_ids):
+        """根据输入的token ID序列生成对应的标签序列，用于语言模型的训练。标签序列中的值为-100表示该位置不参与损失计算，其他位置的值与输入ID相同。
+        Args:    input_ids (List[int]): 输入的token ID列表，每个ID对应一个token，序列长度不超过max_length。
+        Returns: List[int]: 生成的标签列表，与输入ID列表长度相同，其中包含了训练目标的token ID和-100的掩码值。"""
         labels = [-100] * len(input_ids)
         i = 0
         while i < len(input_ids):
@@ -94,12 +106,12 @@ class VLMDataset(Dataset):
         image_bytes = self.table['image_bytes'][index].as_py()
         if not isinstance(image_bytes, list): image_bytes = [image_bytes]
         
-        conversations = pre_processing_chat(conversations)
-        prompt = self.create_chat_prompt(conversations)
-        prompt = post_processing_chat(prompt)
-        input_ids = self.tokenizer(prompt).input_ids[:self.max_length]
-        input_ids += [self.tokenizer.pad_token_id] * (self.max_length - len(input_ids))
-        labels = self.generate_labels(input_ids)
+        conversations = pre_processing_chat(conversations) # 在生成提示词之前添加系统提示词
+        prompt = self.create_chat_prompt(conversations) # 生成提示词
+        prompt = post_processing_chat(prompt) # 在生成提示词之后移除空思考标签
+        input_ids = self.tokenizer(prompt).input_ids[:self.max_length] # 将生成的提示词转换为token ID，并截断到最大长度
+        input_ids += [self.tokenizer.pad_token_id] * (self.max_length - len(input_ids)) # 使用pad_token_id填充输入ID列表，使其长度达到max_length
+        labels = self.generate_labels(input_ids) # 根据输入ID列表生成对应的标签列表，用于训练目标
 
         image_inputs_list = [MiniMindVLM.image2tensor(Image.open(io.BytesIO(img)), self.preprocess) for img in image_bytes]
         if hasattr(image_inputs_list[0], 'keys'):
